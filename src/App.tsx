@@ -137,6 +137,7 @@ function App() {
     const transport = Tone.getTransport()
     transport.stop()
     transport.cancel()
+    Tone.getDraw().cancel()
     transport.position = 0
     setIsPlaying(false)
     setActiveStep(null)
@@ -186,8 +187,11 @@ function App() {
     // Draw callbacks run on requestAnimationFrame. A small anticipation gives React
     // enough time to paint the cursor before the audio event reaches the speakers.
     const draw = Tone.getDraw()
+    draw.cancel()
     draw.anticipation = 0.03
 
+    // Schedule every hit before starting the transport. This avoids nested, late
+    // drum scheduling and gives Web Audio enough lead time on slower devices.
     const beatSeconds = 60 / settings.tempo
     const stepSeconds = beatSeconds / 2
     riff.notes.forEach((tabNote, index) => {
@@ -203,12 +207,14 @@ function App() {
 
     for (let beat = 0; beat < settings.bars * 4; beat += 1) {
       const time = beat * beatSeconds
-      transport.schedule((scheduledTime) => {
-        if (beat % 4 === 0 || beat % 4 === 2) kickRef.current?.triggerAttackRelease('C1', '8n', scheduledTime)
-        if (beat % 4 === 1 || beat % 4 === 3) snareRef.current?.triggerAttackRelease('16n', scheduledTime)
-        hatRef.current?.triggerAttackRelease('16n', scheduledTime)
-        hatRef.current?.triggerAttackRelease('16n', scheduledTime + stepSeconds)
-      }, time)
+      if (beat % 4 === 0 || beat % 4 === 2) {
+        transport.schedule((scheduledTime) => kickRef.current?.triggerAttackRelease('C1', '8n', scheduledTime), time)
+      }
+      if (beat % 4 === 1 || beat % 4 === 3) {
+        transport.schedule((scheduledTime) => snareRef.current?.triggerAttackRelease('16n', scheduledTime), time)
+      }
+      transport.schedule((scheduledTime) => hatRef.current?.triggerAttackRelease('16n', scheduledTime), time)
+      transport.schedule((scheduledTime) => hatRef.current?.triggerAttackRelease('16n', scheduledTime), time + stepSeconds)
     }
 
     const finishAt = riff.notes.length * stepSeconds + 0.1
@@ -221,12 +227,17 @@ function App() {
       }, scheduledTime)
     }, finishAt)
     setIsPlaying(true)
-    transport.start('+0.05')
+    transport.start('+0.12')
   }, [riff.notes, settings.bars, settings.sound, settings.tempo])
 
   const onGenerate = () => {
     stopPlayback()
     setRiff(generateRiff(settings))
+  }
+
+  const onSoundChange = (sound: GuitarSound) => {
+    if (isPlaying) stopPlayback()
+    updateSetting('sound', sound)
   }
 
   useEffect(() => {
@@ -274,9 +285,7 @@ function App() {
       </header>
 
       <section className="hero" id="top">
-        <p className="eyebrow">Твоя следующая идея — в одном риффе</p>
         <h1>Собери мелодию.<br /><em>Сыграй её сразу.</em></h1>
-        <p className="hero-copy">Настрой лад, характер и темп — MusicTabs соберёт гитарную табулатуру и проиграет её вместе с ударными.</p>
       </section>
 
       <section className="forge" aria-label="Генератор риффа">
@@ -303,13 +312,6 @@ function App() {
             {GENRES.map((genre) => <button key={genre} className={settings.genre === genre ? 'selected' : ''} onClick={() => updateSetting('genre', genre)}>{genre}</button>)}
           </div>
 
-          <label className="control-label" htmlFor="sound">Звук гитары</label>
-          <div className="choice-group sound-group" id="sound">
-            {(Object.entries(GUITAR_SOUNDS) as [GuitarSound, string][]).map(([sound, label]) => (
-              <button key={sound} className={settings.sound === sound ? 'selected' : ''} onClick={() => updateSetting('sound', sound)}>{label}</button>
-            ))}
-          </div>
-
           <div className="range-head"><label htmlFor="complexity">Сложность</label><strong>{['Просто', 'Свободно', 'Смело', 'Технично'][settings.complexity - 1]}</strong></div>
           <input id="complexity" type="range" min="1" max="4" value={settings.complexity} onChange={(event) => updateSetting('complexity', Number(event.target.value))} />
 
@@ -324,7 +326,7 @@ function App() {
         <section className="result-panel">
           <div className="result-topline">
             <div>
-              <p className="eyebrow">02 · Твой рифф</p>
+              <p className="eyebrow">02 · Играй рифф</p>
               <h2>{riff.name}</h2>
             </div>
             <div className="metadata"><span>{settings.bars}/4</span><span>{settings.tempo} BPM</span></div>
@@ -359,7 +361,15 @@ function App() {
             <button className={`play-button ${isPlaying ? 'playing' : ''}`} onClick={isPlaying ? stopPlayback : playRiff} aria-label={isPlaying ? 'Остановить проигрывание' : 'Проиграть рифф'}>
               {isPlaying ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z" /></svg>}
             </button>
-            <div className="player-copy"><strong>{isPlaying ? 'Играет с ударными' : 'Нажми, чтобы услышать'}</strong><span>Гитара · барабаны · {settings.tempo} BPM</span></div>
+            <div className="player-copy"><strong>{isPlaying ? 'Играет с ударными' : 'Нажми, чтобы услышать'}</strong><span>{GUITAR_SOUNDS[settings.sound]} · барабаны · {settings.tempo} BPM</span></div>
+            <div className="sound-control">
+              <span>Звук</span>
+              <div>
+                {(Object.entries(GUITAR_SOUNDS) as [GuitarSound, string][]).map(([sound, label]) => (
+                  <button key={sound} className={settings.sound === sound ? 'selected' : ''} onClick={() => onSoundChange(sound)}>{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="tempo-control">
               <label htmlFor="tempo">Темп</label>
               <div><input id="tempo" type="range" min="60" max="180" value={settings.tempo} onChange={(event) => updateSetting('tempo', Number(event.target.value))} /><output>{settings.tempo}</output></div>
