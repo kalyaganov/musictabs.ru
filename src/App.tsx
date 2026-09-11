@@ -14,6 +14,11 @@ const GUITAR_SOUNDS = {
   nylon: 'Нейлон',
   drive: 'Drive',
 } as const
+const THEMES = {
+  studio: 'Студия',
+  paper: 'Бумага',
+  night: 'Ночь',
+} as const
 const STRING_NAMES = ['e', 'B', 'G', 'D', 'A', 'E'] as const
 const STRING_MIDI = [64, 59, 55, 50, 45, 40] as const
 
@@ -21,6 +26,7 @@ type Key = (typeof KEYS)[number]
 type Scale = keyof typeof SCALES
 type Genre = (typeof GENRES)[number]
 type GuitarSound = keyof typeof GUITAR_SOUNDS
+type Theme = keyof typeof THEMES
 
 interface Settings {
   key: Key
@@ -97,6 +103,10 @@ function generateRiff(settings: Settings): GeneratedRiff {
 }
 
 function App() {
+  const [theme, setTheme] = useState<Theme>(() => {
+    const savedTheme = localStorage.getItem('musictabs-theme')
+    return savedTheme && savedTheme in THEMES ? savedTheme as Theme : 'paper'
+  })
   const [settings, setSettings] = useState<Settings>({
     key: 'A',
     scale: 'minor',
@@ -223,6 +233,12 @@ function App() {
     Tone.getDestination().volume.value = settings.volume === 0 ? -60 : Tone.gainToDb(settings.volume / 100)
   }, [settings.volume])
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('musictabs-theme', theme)
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'paper' ? '#f1ecdf' : '#101315')
+  }, [theme])
+
   useEffect(() => () => {
     Tone.getTransport().stop()
     Tone.getTransport().cancel()
@@ -247,7 +263,14 @@ function App() {
           <span className="brand-mark">MT</span>
           <span>MUSIC TABS</span>
         </a>
-        <span className="header-note"><i /> генератор гитарных мелодий</span>
+        <div className="header-tools">
+          <span className="header-note"><i /> генератор гитарных мелодий</span>
+          <div className="theme-switcher" aria-label="Тема оформления">
+            {(Object.entries(THEMES) as [Theme, string][]).map(([value, label]) => (
+              <button key={value} className={theme === value ? 'selected' : ''} onClick={() => setTheme(value)} aria-pressed={theme === value}>{label}</button>
+            ))}
+          </div>
+        </div>
       </header>
 
       <section className="hero" id="top">

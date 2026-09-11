@@ -1,0 +1,9 @@
+{
+  "name": "MusicTabs — генератор гитарных табов",
+  "short_name": "MusicTabs",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1ecdf",
+  "theme_color": "#f1ecdf",
+  "lang": "ru"
+}
