@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { flushSync } from 'react-dom'
 import * as Tone from 'tone'
 
 const KEYS = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'] as const
@@ -121,38 +120,64 @@ function App() {
     key: 'A', scale: 'minor', genre: 'Indie', sound: 'clean', volume: 70, tempo: 96, bars: 4, complexity: 2,
   }))
   const [isPlaying, setIsPlaying] = useState(false)
-  const [activeStep, setActiveStep] = useState<number | null>(null)
   const synthRef = useRef<Tone.PluckSynth | null>(null)
   const synthSoundRef = useRef<GuitarSound | null>(null)
   const distortionRef = useRef<Tone.Distortion | null>(null)
   const kickRef = useRef<Tone.MembraneSynth | null>(null)
   const snareRef = useRef<Tone.NoiseSynth | null>(null)
   const hatRef = useRef<Tone.MetalSynth | null>(null)
+  const tabCardRef = useRef<HTMLDivElement | null>(null)
+  const stepCounterRef = useRef<HTMLSpanElement | null>(null)
+  const stepPulseRef = useRef<HTMLSpanElement | null>(null)
+  const playbackIdRef = useRef(0)
 
   const updateSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }))
   }
 
+  // Updating the whole tab for every eighth note makes long riffs stutter,
+  // especially after the audio engine has already played a few riffs. Keep this
+  // small, time-critical bit of UI outside React's render loop instead.
+  const setPlaybackStep = useCallback((step: number | null, totalSteps: number) => {
+    const tabCard = tabCardRef.current
+    if (tabCard) {
+      tabCard.querySelectorAll('.tab-cell.active').forEach((cell) => cell.classList.remove('active'))
+      if (step !== null) {
+        tabCard.querySelectorAll(`[data-step="${step}"]`).forEach((cell) => cell.classList.add('active'))
+      }
+    }
+    if (stepCounterRef.current) {
+      stepCounterRef.current.textContent = step === null ? 'Готов к проигрыванию' : `Нота ${step + 1} из ${totalSteps}`
+    }
+    stepPulseRef.current?.classList.toggle('pulse', step !== null)
+  }, [])
+
   const stopPlayback = useCallback(() => {
+    playbackIdRef.current += 1
     const transport = Tone.getTransport()
     transport.stop()
-    transport.cancel()
-    Tone.getDraw().cancel()
+    transport.cancel(0)
+    Tone.getDraw().cancel(0)
     transport.position = 0
+    synthRef.current?.triggerRelease()
+    setPlaybackStep(null, 0)
     setIsPlaying(false)
-    setActiveStep(null)
-  }, [])
+  }, [setPlaybackStep])
 
   const playRiff = useCallback(async () => {
     await Tone.start()
+    const playbackId = ++playbackIdRef.current
     const transport = Tone.getTransport()
     transport.stop()
-    transport.cancel()
+    transport.cancel(0)
+    Tone.getDraw().cancel(0)
     transport.position = 0
+    setPlaybackStep(null, riff.notes.length)
 
     if (!synthRef.current || synthSoundRef.current !== settings.sound) {
       synthRef.current?.dispose()
       distortionRef.current?.dispose()
+      distortionRef.current = null
       const guitarPresets = {
         clean: { attackNoise: 0.7, dampening: 4200, resonance: 0.78 },
         nylon: { attackNoise: 0.35, dampening: 2700, resonance: 0.92 },
@@ -184,23 +209,25 @@ function App() {
       snareRef.current.volume.value = -8
     }
 
-    // Draw callbacks run on requestAnimationFrame. A small anticipation gives React
-    // enough time to paint the cursor before the audio event reaches the speakers.
+    const guitar = synthRef.current
+    const kick = kickRef.current
+    const snare = snareRef.current
+    const hat = hatRef.current
     const draw = Tone.getDraw()
-    draw.cancel()
     draw.anticipation = 0.03
 
-    // Schedule every hit before starting the transport. This avoids nested, late
-    // drum scheduling and gives Web Audio enough lead time on slower devices.
+    // Schedule every hit before starting the transport. Capturing the current audio
+    // nodes and guarding the playback id prevents callbacks from a stopped riff from
+    // reaching a later one.
     const beatSeconds = 60 / settings.tempo
     const stepSeconds = beatSeconds / 2
     riff.notes.forEach((tabNote, index) => {
       const time = index * stepSeconds
       transport.schedule((scheduledTime) => {
-        synthRef.current?.triggerAttack(tabNote.note, scheduledTime)
+        if (playbackId !== playbackIdRef.current) return
+        guitar?.triggerAttack(tabNote.note, scheduledTime)
         draw.schedule(() => {
-          // The cursor is rhythm-critical UI, so do not leave it to a deferred render.
-          flushSync(() => setActiveStep(index))
+          if (playbackId === playbackIdRef.current) setPlaybackStep(index, riff.notes.length)
         }, scheduledTime)
       }, time)
     })
@@ -208,27 +235,35 @@ function App() {
     for (let beat = 0; beat < settings.bars * 4; beat += 1) {
       const time = beat * beatSeconds
       if (beat % 4 === 0 || beat % 4 === 2) {
-        transport.schedule((scheduledTime) => kickRef.current?.triggerAttackRelease('C1', '8n', scheduledTime), time)
+        transport.schedule((scheduledTime) => {
+          if (playbackId === playbackIdRef.current) kick?.triggerAttackRelease('C1', '8n', scheduledTime)
+        }, time)
       }
       if (beat % 4 === 1 || beat % 4 === 3) {
-        transport.schedule((scheduledTime) => snareRef.current?.triggerAttackRelease('16n', scheduledTime), time)
+        transport.schedule((scheduledTime) => {
+          if (playbackId === playbackIdRef.current) snare?.triggerAttackRelease('16n', scheduledTime)
+        }, time)
       }
-      transport.schedule((scheduledTime) => hatRef.current?.triggerAttackRelease('16n', scheduledTime), time)
-      transport.schedule((scheduledTime) => hatRef.current?.triggerAttackRelease('16n', scheduledTime), time + stepSeconds)
+      transport.schedule((scheduledTime) => {
+        if (playbackId === playbackIdRef.current) hat?.triggerAttackRelease('16n', scheduledTime)
+      }, time)
+      transport.schedule((scheduledTime) => {
+        if (playbackId === playbackIdRef.current) hat?.triggerAttackRelease('16n', scheduledTime)
+      }, time + stepSeconds)
     }
 
     const finishAt = riff.notes.length * stepSeconds + 0.1
     transport.schedule((scheduledTime) => {
+      if (playbackId !== playbackIdRef.current) return
       draw.schedule(() => {
-        flushSync(() => {
-          setIsPlaying(false)
-          setActiveStep(null)
-        })
+        if (playbackId !== playbackIdRef.current) return
+        setPlaybackStep(null, riff.notes.length)
+        setIsPlaying(false)
       }, scheduledTime)
     }, finishAt)
     setIsPlaying(true)
     transport.start('+0.12')
-  }, [riff.notes, settings.bars, settings.sound, settings.tempo])
+  }, [riff.notes, setPlaybackStep, settings.bars, settings.sound, settings.tempo])
 
   const onGenerate = () => {
     stopPlayback()
@@ -251,8 +286,10 @@ function App() {
   }, [theme])
 
   useEffect(() => () => {
+    playbackIdRef.current += 1
     Tone.getTransport().stop()
-    Tone.getTransport().cancel()
+    Tone.getTransport().cancel(0)
+    Tone.getDraw().cancel(0)
     synthRef.current?.dispose()
     distortionRef.current?.dispose()
     kickRef.current?.dispose()
@@ -332,7 +369,7 @@ function App() {
             <div className="metadata"><span>{settings.bars}/4</span><span>{settings.tempo} BPM</span></div>
           </div>
 
-          <div className="tab-card" role="img" aria-label="Сгенерированная гитарная табулатура">
+          <div className="tab-card" ref={tabCardRef} role="img" aria-label="Сгенерированная гитарная табулатура">
             {tabRows.map(({ notes, start }, rowIndex) => (
               <div className="tab-row" key={`${riff.id}-${start}`}>
                 <div className="tab-ruler" style={{ gridTemplateColumns: `repeat(${notes.length / 8}, 1fr)` }}>
@@ -345,7 +382,7 @@ function App() {
                       <div className="string-cells" style={{ gridTemplateColumns: `repeat(${notes.length}, minmax(15px, 1fr))` }}>
                         {notes.map((tabNote, index) => {
                           const step = start + index
-                          return <span key={`${riff.id}-${stringIndex}-${step}`} className={`tab-cell ${tabNote.stringIndex === stringIndex ? 'has-note' : ''} ${activeStep === step ? 'active' : ''} ${(index + 1) % 8 === 0 ? 'bar-end' : ''}`}>
+                          return <span key={`${riff.id}-${stringIndex}-${step}`} data-step={step} className={`tab-cell ${tabNote.stringIndex === stringIndex ? 'has-note' : ''} ${(index + 1) % 8 === 0 ? 'bar-end' : ''}`}>
                             {tabNote.stringIndex === stringIndex ? tabNote.fret : '—'}
                           </span>
                         })}
@@ -379,7 +416,7 @@ function App() {
               <div><input id="volume" type="range" min="0" max="100" value={settings.volume} onChange={(event) => updateSetting('volume', Number(event.target.value))} /><output>{settings.volume}%</output></div>
             </div>
           </div>
-          <div className="step-counter"><span className={isPlaying ? 'pulse' : ''} /> {activeStep === null ? 'Готов к проигрыванию' : `Нота ${activeStep + 1} из ${totalSteps}`}</div>
+          <div className="step-counter"><span className="step-indicator" ref={stepPulseRef} /> <span ref={stepCounterRef}>Готов к проигрыванию</span></div>
         </section>
       </section>
 
