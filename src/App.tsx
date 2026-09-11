@@ -52,7 +52,8 @@ interface GeneratedRiff {
 }
 
 const noteName = (midi: number): string => {
-  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B']
+  // Tone parses ASCII accidentals (#), while the UI uses the typographic ♯.
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
   return `${names[midi % 12]}${Math.floor(midi / 12) - 1}`
 }
 
@@ -167,6 +168,7 @@ function App() {
   const playRiff = useCallback(async () => {
     await Tone.start()
     const playbackId = ++playbackIdRef.current
+    Tone.getDestination().volume.value = settings.volume === 0 ? -60 : Tone.gainToDb(settings.volume / 100)
     const transport = Tone.getTransport()
     transport.stop()
     transport.cancel(0)
@@ -263,7 +265,7 @@ function App() {
     }, finishAt)
     setIsPlaying(true)
     transport.start('+0.12')
-  }, [riff.notes, setPlaybackStep, settings.bars, settings.sound, settings.tempo])
+  }, [riff.notes, setPlaybackStep, settings.bars, settings.sound, settings.tempo, settings.volume])
 
   const onGenerate = () => {
     stopPlayback()
@@ -275,9 +277,14 @@ function App() {
     updateSetting('sound', sound)
   }
 
-  useEffect(() => {
-    Tone.getDestination().volume.value = settings.volume === 0 ? -60 : Tone.gainToDb(settings.volume / 100)
-  }, [settings.volume])
+  const onVolumeChange = (volume: number) => {
+    updateSetting('volume', volume)
+    // Do not create an AudioContext for a volume-only interaction. Once playing,
+    // the context already exists and the control can take effect immediately.
+    if (isPlaying) {
+      Tone.getDestination().volume.value = volume === 0 ? -60 : Tone.gainToDb(volume / 100)
+    }
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -413,7 +420,7 @@ function App() {
             </div>
             <div className="tempo-control volume-control">
               <label htmlFor="volume">Громкость</label>
-              <div><input id="volume" type="range" min="0" max="100" value={settings.volume} onChange={(event) => updateSetting('volume', Number(event.target.value))} /><output>{settings.volume}%</output></div>
+              <div><input id="volume" type="range" min="0" max="100" value={settings.volume} onChange={(event) => onVolumeChange(Number(event.target.value))} /><output>{settings.volume}%</output></div>
             </div>
           </div>
           <div className="step-counter"><span className="step-indicator" ref={stepPulseRef} /> <span ref={stepCounterRef}>Готов к проигрыванию</span></div>
